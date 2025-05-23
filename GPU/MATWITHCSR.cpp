@@ -6,6 +6,7 @@
 #include <stdlib.h>
 //#include <cstring>
 #include "../HYIMPL/SIMPLEMAT.h"
+#include "../HYIMPL/utils.h"
 
 #define MAXITERATIONS 100000
 
@@ -50,49 +51,12 @@ int main(int argc, char* argv[]) {
     std::ifstream hIncidenceFile(argv[1]);
     std::ifstream nLabelsFile(argv[2]);
 
-    std::string lineString;
 
-    long long int index = 0;
-    
-
-    //counting number of columns FROM DATASET
-    while(std::getline (hIncidenceFile, lineString)) {
-        index++;
-    }
-
-    mat.ncol = index;
-    index = 0;
-    
-
-    //counting number of rows
-    while(std::getline (nLabelsFile, lineString)) {
-        index++;
-    }
-
-    mat.nrow = index;
-
-
-    //Avoiding overflow
-    long long int matsize = mat.nrow * mat.ncol;
+    mat.incidenceMatrix = extractIncidenceMatrix(&hIncidenceFile, &nLabelsFile, &mat.nrow, &mat.ncol);
 
     //Declaring labels array
-    int* nodelabels = (int*) calloc(mat.nrow, sizeof(int));
+    int* nodelabels = extractNodeLabels(&nLabelsFile, mat.nrow);
     int* edgelabels = (int*) calloc(mat.ncol, sizeof(int));
-
-    mat.incidenceMatrix = (bool*) calloc(matsize, sizeof(bool));
-
-    // Reset the file stream to the beginning
-    hIncidenceFile.clear();
-    hIncidenceFile.seekg(0, hIncidenceFile.beg);
-
-    // Reset the file stream to the beginning
-    nLabelsFile.clear();
-    nLabelsFile.seekg(0, nLabelsFile.beg);
-
-
-    index = 0;
-    std::string s = "";
-
     /*
     // Initialize the signal handler for segmentation faults
     // This will help us catch segmentation faults and print the address
@@ -107,52 +71,6 @@ int main(int argc, char* argv[]) {
     sigaction(SIGSEGV, &sa, NULL);
     */
 
-    // Use a while loop together with the getline() function to read the file line by line
-    //READING THE INCIDENCE MATRIX
-    while (std::getline (hIncidenceFile, lineString) && index < mat.ncol) {
-    
-        std::cout << "index "<< index << ": ";
-
-        for(char c : lineString) {
-            if(isdigit(c)) {
-                s = s + c;
-            }else{
-                if(!s.empty()) {
-                    //std::cout << s << " ";
-                    int row = std::stoi(s);
-                    
-                    std::cout << "ROW Value: " << row << "\n";
-                    std::cout << "Value: " << (row-1) * mat.ncol << "\n";
-                    long long int offset = (((row - 1) * mat.ncol) + index);
-                    mat.incidenceMatrix[offset] = true;
-                    s = "";
-                }
-            }
-        }
-
-        //NEEDED FOR THE LAST LINE
-        if(hIncidenceFile.peek()==EOF && !s.empty()) {
-            std::cout << s << " ";
-            long long int row = std::stoi(s);
-            long long int offset = (((row - 1) * mat.ncol) + index);
-            mat.incidenceMatrix[offset] = true;
-        }
-
-        s = "";
-
-        index++;
-    }
-
-    index = 0;
-
-    //READING THE NODE LABELS
-    while (std::getline (nLabelsFile, lineString)) {
-        nodelabels[index] = std::stoi(lineString);
-
-        index++;
-    }
-
-
     bool stop = false;
 
     int rounds = 1;
@@ -162,13 +80,13 @@ int main(int argc, char* argv[]) {
 
     bool* matrix = mat.incidenceMatrix;
 
-    long long int* row_major_Non_zeroes_for_rows = (long long int*) malloc(sizeof(long long int) * rows + 1);
+    long long int* row_major_Non_zeroes_for_rows = (long long int*) malloc(sizeof(long long int) * (rows + 1));
 
     long long int* row_major_Non_zeroes_for_columns = (long long int*) malloc(sizeof(long long int) * 1);
 
     long long int* column_major_Non_zeroes_for_rows = (long long int*) malloc(sizeof(long long int) * 1);
-    
-    long long int* column_major_Non_zeroes_for_columns = (long long int*) malloc(sizeof(long long int) * cols + 1);
+
+    long long int* column_major_Non_zeroes_for_columns = (long long int*) malloc(sizeof(long long int) * (cols + 1));
 
     row_major_Non_zeroes_for_rows[0] = 0;
     column_major_Non_zeroes_for_columns[0] = 0;
@@ -177,17 +95,21 @@ int main(int argc, char* argv[]) {
     long long int row_major_size = 0;
 
     //BUILDING ROW-MAJOR CSR FOR THE MATRIX
+    #pragma omp parallel for shared(rows, cols, matrix)
     for(int i = 0; i < rows; ++i) {
         int count = 0;
-        for (int j = 0; j < cols; ++j){
+        for (int j = 0; j < 10; ++j){
             if(matrix[(i * cols) + j] == 1) {
                 count++;
-                if(row_major_size != 0) {
-                    row_major_Non_zeroes_for_columns = (long long int*) realloc(row_major_Non_zeroes_for_columns, sizeof(long long int) * (row_major_size + 1));
-                    row_major_Non_zeroes_for_columns[row_major_size] = j;
-                }else{
-                    row_major_Non_zeroes_for_columns[0] = j;
+        
+                //REALLOCATING THE MEMORY FOR POSITIONS DYNAMIC ARRAY
+                long long int* pnt = (long long int*) realloc(row_major_Non_zeroes_for_columns, sizeof(long long int) * (row_major_size + 1));
+                row_major_Non_zeroes_for_columns = pnt;
+                if(pnt == NULL){
+                    std::cerr << "Memory allocation failed\n";
+                    exit(1);
                 }
+                row_major_Non_zeroes_for_columns[row_major_size] = j;
                 row_major_size++;
             }
         }
@@ -204,12 +126,10 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < rows; ++i){
             if(matrix[(i * cols) + j] == 1) {
                 count++;
-                if(column_major_size != 0) {
-                    column_major_Non_zeroes_for_rows = (long long int*) realloc(column_major_Non_zeroes_for_rows, sizeof(long long int) * (column_major_size + 1));
-                    column_major_Non_zeroes_for_rows[column_major_size] = i;
-                }else{
-                    column_major_Non_zeroes_for_rows[0] = i;
-                }
+
+                long long int* pnt = (long long int*) realloc(column_major_Non_zeroes_for_rows, sizeof(long long int) * (column_major_size + 1));
+                column_major_Non_zeroes_for_rows = pnt;
+                column_major_Non_zeroes_for_rows[column_major_size] = i;
                 column_major_size++;
             }
         }
