@@ -42,27 +42,29 @@ int main(int argc, char* argv[]) {
     std::ifstream nLabelsFile(argv[2]);
 
 
-    /*mat.incidenceMatrix = extractIncidenceMatrix(&hIncidenceFile, &nLabelsFile, &mat.nrow, &mat.ncol);
+    /*
+    mat.incidenceMatrix = extractIncidenceMatrix(&hIncidenceFile, &nLabelsFile, &mat.nrow, &mat.ncol);
 
     //Declaring labels array
     int* nodelabels = extractNodeLabels(&nLabelsFile, mat.nrow);
-    int* edgelabels = (int*) malloc(mat.ncol * sizeof(int));
     */
-   
+
     int* edgelabels = (int*) malloc(mat.ncol * sizeof(int));
     int* nodelabels = (int*) malloc(mat.nrow * sizeof(int));
     mat.incidenceMatrix = (bool*) malloc(mat.nrow * mat.ncol * sizeof(bool));
-
-
+    
     // Seed the random number generator
-    //srand(static_cast<unsigned>(time(0)));
+    srand(static_cast<unsigned>(time(0)));
+
+
+    printf("ciao\n");
+    // Initialize the incidence matrix
 
     long long int rows = mat.nrow;
     long long int cols = mat.ncol;
 
     bool* matrix = mat.incidenceMatrix;
 
-    // Initialize the incidence matrix)
     for (int i = 0; i < rows; ++i) {
         for (int j = 0; j < cols; ++j) {
             // Randomly assign 0 or 1 to the incidence matrix
@@ -81,9 +83,6 @@ int main(int argc, char* argv[]) {
         nodelabels[i] = rand() % NCATEGORIES + 1;
     }
 
-    
-
-
 
     bool stop = false;
 
@@ -101,10 +100,45 @@ int main(int argc, char* argv[]) {
     long long int matsize = mat.nrow * mat.ncol;
 
 
+    bool* matrix2 = (bool*) malloc(sizeof(bool) * matsize);
+    printf("Matrix size: %lld\n", matsize);
+
+    #pragma omp target enter data map(alloc: matrix2[0:matsize])
 
     bool change = false;
 
+
+    int stride = 16;
+    
+
     #pragma omp target enter data map(to: matrix[0:matsize])
+    // Transpose the matrix
+    
+    #pragma omp target
+    #pragma omp teams distribute parallel for simd collapse(2) firstprivate(rows, cols, stride)
+    for(int li = 0; li < rows; li+=stride) {
+        for(int lj = 0; lj < cols; lj+=stride) {
+            for(int i = 0; i < stride; ++i) {
+                for (int j = 0; j < stride; ++j){
+                    matrix2[(lj + j) * rows + (li + i)] = matrix[(li + i) * cols + (lj + j)];
+                    //printf("(%d, %d)", matrix2[j * rows + i], matrix[i * cols + j]);
+                }
+            }
+        }
+    }
+    double start2 = omp_get_wtime();
+
+    /*#pragma omp target
+    #pragma omp teams distribute parallel for simd firstprivate(rows, cols)
+    for(int i = 0; i < rows; ++i) {
+        for (int j = 0; j < cols; ++j){
+            matrix2[(j) * rows + (i)] = matrix[(i) * cols + (j)];
+                //printf("(%d, %d)", matrix2[j * rows + i], matrix[i * cols + j]);
+        }
+    }*/
+    double end2 = omp_get_wtime();
+    
+    std::cout << "Transpose execution time: " << end2 - start2 << " seconds\n";
 
     double start = omp_get_wtime();
 
@@ -138,7 +172,7 @@ int main(int argc, char* argv[]) {
                     //printf("mat_value %d\n", matrix[(i * cols) + j]);
                     //If the value is in list 1, we count it
                     //If the value is in list is 0, we do not count it
-                    categoryCount[label] = categoryCount[label] + matrix[(i * cols) + j];
+                    categoryCount[label] = categoryCount[label] + matrix2[(j * rows) + i];
                 }
             
                 //AVOIDING CONDITIONAL STATEMENTS INSIDE THE DEVICE PARALLEL REGION
@@ -150,11 +184,12 @@ int main(int argc, char* argv[]) {
                 }
 
                 int edgelabel = edgelabels[j];
+
                 if(edgelabel != maxIndex)
                     change = true;
 
-                edgelabels[j] = maxIndex; 
-    
+                edgelabels[j] = maxIndex;
+
             }
 
  
@@ -186,6 +221,7 @@ int main(int argc, char* argv[]) {
                             maxIndex = k;
                         }
                     }
+
                     int nodeLabel = nodelabels[i];
                     if(nodeLabel != maxIndex)
                         change = true;
