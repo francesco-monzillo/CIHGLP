@@ -1,9 +1,11 @@
+#include <stdint.h>
 #include <omp.h>
 #include <iostream>
 #include <fstream>
 #include <string.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <sstream>
 //#include <cstring>
 #include "../HYIMPL/SIMPLEMAT.h"
 #include "../HYIMPL/utils.h"
@@ -11,7 +13,7 @@
 #define MAXITERATIONS 100
 
 //#pragma omp requires unified_shared_memory
-
+// Datasets (10000 30000) (30000 50000) (55000 80000)
 
 void segfault_sigaction(int signal, siginfo_t *si, void *arg)
 {
@@ -25,15 +27,7 @@ int main(int argc, char* argv[]) {
 
     // Initialize the SimpleMat structure
     SimpleMatGPU mat;
-    
-    std::cout << "Enter the number of rows: \n";
 
-    std::cin >> mat.nrow;
-
-    std::cout << "Enter the number of columns: \n";
-
-    std::cin >> mat.ncol;
-    
 
     //One more category for the 0 label (corresponding to the nodes without label)
     //categories = categories + 1;
@@ -49,64 +43,120 @@ int main(int argc, char* argv[]) {
     int* nodelabels = extractNodeLabels(&nLabelsFile, mat.nrow);
     */
 
-    int* edgelabels = (int*) malloc(mat.ncol * sizeof(int));
-    int* nodelabels = (int*) malloc(mat.nrow * sizeof(int));
-    mat.incidenceMatrix = (bool*) malloc(mat.nrow * mat.ncol * sizeof(bool));
+    //int* edgelabels = (int*) malloc(mat.ncol * sizeof(int));
+    //int* nodelabels = (int*) malloc(mat.nrow * sizeof(int));
+    //mat.incidenceMatrix = (bool*) malloc(mat.nrow * mat.ncol * sizeof(bool));
+
+
+    std::string lineString = "";
+    long long int index = 0;
+
+    
+
+    while(std::getline(hIncidenceFile, lineString)){
+        if(index == 0){
+            std::stringstream strstream(lineString);
+            std::string token;
+            int counter = 0;
+            
+        //Extract the first node from the line
+            while(std::getline(strstream, token, ' ')){
+                counter++;
+            }
+            mat.ncol = counter;
+        }
+        index++;
+    }
+
+    mat.nrow = index;
+
+    hIncidenceFile.clear();
+    hIncidenceFile.seekg(0, hIncidenceFile.beg);
+    
+    index = 0;
+
+    uint32_t* edgelabels = (uint32_t*) calloc(mat.ncol, sizeof(uint32_t));
+
+    mat.incidenceMatrix = (uint32_t*) calloc(mat.nrow * mat.ncol, sizeof(uint32_t));
+
+    uint32_t* nodelabels = (uint32_t*) malloc(mat.nrow * sizeof(uint32_t));
+
+    while(std::getline(hIncidenceFile, lineString)) {
+        // Count the number of rows and columns
+        
+        std::stringstream strstream(lineString);
+        std::string token;
+
+        long long int j = 0;
+
+        //Extract the first node from the line
+        while(std::getline(strstream, token, ' ')){
+            int number = std::stoi(token);
+            mat.incidenceMatrix[index * mat.ncol + j] = number;
+            j++;
+        }
+        index++;    
+    }
+
+    index = 0;
+
+    uint32_t* nodelabelsCopy = (uint32_t*) malloc(mat.nrow * sizeof(uint32_t));
+
+
+    while(std::getline(nLabelsFile, lineString)) {
+        // Count the number of rows and columns
+        
+        std::stringstream strstream(lineString);
+        std::string token;
+
+        //Extract the first node from the line
+        while(std::getline(strstream, token, ' ')){
+            int category = std::stoi(token);
+
+
+           if(category == 255){
+                nodelabels[index] = 0;
+                nodelabelsCopy[index] = 0; // Copy the label for later use
+            }
+            else{
+                nodelabels[index] = category; // Ensure labels are in the range [1, NCATEGORIES]
+                nodelabelsCopy[index] = category; // Copy the label for later use
+            }
+            index++;
+        }    
+    }
+
+
+
     
     // Seed the random number generator
-    srand(static_cast<unsigned>(time(0)));
+    //srand(static_cast<unsigned>(time(0)));
 
 
-    printf("ciao\n");
     // Initialize the incidence matrix
 
     long long int rows = mat.nrow;
     long long int cols = mat.ncol;
 
-    bool* matrix = mat.incidenceMatrix;
-
-    for (int i = 0; i < rows; ++i) {
-        for (int j = 0; j < cols; ++j) {
-            // Randomly assign 0 or 1 to the incidence matrix
-            // Here we just use a random number generator for demonstration purposes
-            if(i==0){
-                edgelabels[j] = 0;
-            }
-            int randNum = rand() % 10;
-            if(randNum < 3)
-                mat.incidenceMatrix[(i * cols) + j] = 1;
-            else
-                mat.incidenceMatrix[(i * cols) + j] = 0;
-            //std::cout << mat.incidenceMatrix[(i * mat.ncol) + j] << " ";
-        }
-        //std::cout << "\n";
-        nodelabels[i] = rand() % NCATEGORIES + 1;
-    }
+    uint32_t* matrix = mat.incidenceMatrix;
 
 
     bool stop = false;
 
     int rounds = 1;
 
-    //MAX NUMBER OF TEAMS
-    long long int workGNumForEdges = mat.ncol / omp_get_teams_thread_limit();
-    long long int workGNumForRows = mat.nrow / omp_get_teams_thread_limit();
-
-    //MAX NUMBER OF THREADS INSIDE A TEAM
-    long long int maxThreads = omp_get_max_threads();
 
     //CALL FUNCTION TO CALCULATE THE SCHEDULING ARRAYS CONTAINING INDICES FOR EACH WORK-ITEM (WORK IN PROGRESS))
 
     long long int matsize = mat.nrow * mat.ncol;
 
 
-    bool* matrix2 = (bool*) malloc(sizeof(bool) * matsize);
+    bool* matrix2 = (bool*) malloc(sizeof(uint32_t) * matsize);
     printf("Matrix size: %lld\n", matsize);
 
     #pragma omp target enter data map(alloc: matrix2[0:matsize])
 
     bool change = false;
-
 
     int stride = 16;
     
@@ -114,6 +164,7 @@ int main(int argc, char* argv[]) {
     #pragma omp target enter data map(to: matrix[0:matsize])
     // Transpose the matrix
     
+      
     #pragma omp target
     #pragma omp teams distribute parallel for simd collapse(2) firstprivate(rows, cols, stride)
     for(int li = 0; li < rows; li+=stride) {
@@ -126,6 +177,7 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+    
     double start2 = omp_get_wtime();
 
     /*#pragma omp target
@@ -140,7 +192,10 @@ int main(int argc, char* argv[]) {
     
     std::cout << "Transpose execution time: " << end2 - start2 << " seconds\n";
 
+    for(int i = 0; i < 30; ++i) {
+
     double start = omp_get_wtime();
+
 
     // Main loop
     // The loop will run until convergence or until the maximum number of iterations is reached
@@ -237,7 +292,7 @@ int main(int argc, char* argv[]) {
         //printf("stop: %d\nround: %d\n", change,rounds);
         change = false;
         rounds++;
-    }while(!stop &&  rounds < MAXITERATIONS);
+    }while(!stop && rounds < MAXITERATIONS);
     
     // Exit the target region and copy the data back to the host
     #pragma omp target exit data map(from: nodelabels[0:rows], edgelabels[0:cols])
@@ -256,10 +311,22 @@ int main(int argc, char* argv[]) {
        // std::cout << "Edge " << j << ": " << edgelabels[j] << "\n";
     //}
 
-    std::cout << "Number of rounds: " << rounds << "\n";
+    std::cout << end - start << ", ";
 
-    std::cout << "Execution time: " << end - start << " seconds\n";
+    
+        for(int i = 0; i < cols; ++i) {
+            edgelabels[i] = 0;
+        }
 
+        for(int i = 0; i < rows; ++i) {
+            nodelabels[i] = nodelabelsCopy[i];
+        }
+
+        rounds = 1;
+        stop = false;
+        change = false;
+
+    }
 
     // Free the allocated memory
     free(mat.incidenceMatrix);
