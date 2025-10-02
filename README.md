@@ -25,10 +25,15 @@ The purpose of the last two optimization instead, is to try to increase the coal
 
 In order to compile each of the two solutions you need to navigate toward the *GPU* folder and, then, assuming you are using clang++ as OpenMP compiler and an NVIDIA GPU, you can use one of these two commands for the first and the second version:
 
+`````
 clang++ -fopenmp -fopenmp-targets=nvptx64-nvidia-cuda -Xopenmp-target=nvptx64-nvidia-cuda -march=<your_CUDA_capability_version> ../HYIMPL/utils.cpp ./SIMPLEGPUIMPL.cpp -o <binary_name>
+`````
 
+`````
 clang++ -O2 -fopenmp -fopenmp-targets=nvptx64-nvidia-cuda -Xopenmp-target=nvptx64-nvidia-cuda -march=sm_86 ../HYIMPL/utils.cpp ./TRANSPOSE_GPUIMPL.cpp -o <binary_name>
-
+`````
 In order to execute one of the two binaries you must follow this schema:
 
+`````
 ./<binary_name> <file_containing_the_incidence_matrix> <file_containing_node_labels>
+`````
